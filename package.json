@@ -1,0 +1,16 @@
+{
+  "name": "grafana-fire-investigator",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc -p ."
+  },
+  "author": "you06",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/jquery": "^3.5.29",
+    "typescript": "^5.4.5"
+  }
+}
