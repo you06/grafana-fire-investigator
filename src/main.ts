@@ -3,7 +3,7 @@
 // @version      2024-05-05
 // @description  clew-searcher is a tool find the clews of unnormal metrics' root cause in the grafana.
 // @author       you06
-// @match        http://127.0.0.1:3000/
+// @match        http://127.0.0.1:3000/d/*
 // @icon         https://blog2.tongmu.me/icon-96x96.png
 // @grant        none
 // ==/UserScript==
@@ -12,6 +12,7 @@
     'use strict';
     
     const debugMode = true
+    const MIN_DISTANCE = 1e-10
     const MAX_WAIT_SECONDS = 60
 
     setInterval(() => {
@@ -98,7 +99,7 @@
                 if (i >= 10) {
                     break
                 }
-                console.log(`rank ${i+1}, score: ${rankedPanels[i].score}, group: ${this.groupMap[rankedPanels[i].panel.id]}, panel: ${rankedPanels[i].panel.title}, series: ${rankedPanels[i].panel.title}`)
+                console.log(`rank ${i+1}, score: ${rankedPanels[i].score}, group: ${this.groupMap[rankedPanels[i].panel.id]}, panel: ${rankedPanels[i].panel.title}, series: ${rankedPanels[i].lowestSeriesName}`)
             }
             this.isRunning = false
         }
@@ -226,7 +227,9 @@
                 }
             }
             return scoredResult
-        }).filter((scoredResult) => scoredResult.score !== -1)
+        }).filter((scoredResult) => scoredResult.score !== -1
+            && scoredResult.score < Number.MAX_VALUE
+            && scoredResult.score > MIN_DISTANCE)
         scoredResults.sort((a, b) => a.score - b.score)
         return scoredResults
     }

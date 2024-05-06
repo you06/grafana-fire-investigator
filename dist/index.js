@@ -3,7 +3,7 @@
 // @version      2024-05-05
 // @description  clew-searcher is a tool find the clews of unnormal metrics' root cause in the grafana.
 // @author       you06
-// @match        http://127.0.0.1:3000/
+// @match        http://127.0.0.1:3000/d/*
 // @icon         https://blog2.tongmu.me/icon-96x96.png
 // @grant        none
 // ==/UserScript==
@@ -55,6 +55,7 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
 (function () {
     'use strict';
     var debugMode = true;
+    var MIN_DISTANCE = 1e-10;
     var MAX_WAIT_SECONDS = 60;
     setInterval(function () {
         document.querySelectorAll('.grafana-app .dashboard-content .panel-wrapper').forEach(function (panel) {
@@ -142,7 +143,7 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
                                 if (i >= 10) {
                                     break;
                                 }
-                                console.log("rank ".concat(i + 1, ", score: ").concat(rankedPanels[i].score, ", group: ").concat(this.groupMap[rankedPanels[i].panel.id], ", panel: ").concat(rankedPanels[i].panel.title, ", series: ").concat(rankedPanels[i].panel.title));
+                                console.log("rank ".concat(i + 1, ", score: ").concat(rankedPanels[i].score, ", group: ").concat(this.groupMap[rankedPanels[i].panel.id], ", panel: ").concat(rankedPanels[i].panel.title, ", series: ").concat(rankedPanels[i].lowestSeriesName));
                             }
                             this.isRunning = false;
                             return [2 /*return*/];
@@ -301,7 +302,9 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
                 }
             }
             return scoredResult;
-        }).filter(function (scoredResult) { return scoredResult.score !== -1; });
+        }).filter(function (scoredResult) { return scoredResult.score !== -1
+            && scoredResult.score < Number.MAX_VALUE
+            && scoredResult.score > MIN_DISTANCE; });
         scoredResults.sort(function (a, b) { return a.score - b.score; });
         return scoredResults;
     }
