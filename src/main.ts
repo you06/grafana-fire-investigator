@@ -10,42 +10,16 @@
 
 (function() {
     'use strict';
-    
-    const debugMode = true
+
+    const debugMode = false
     const MIN_DISTANCE = 1e-10
     const MAX_WAIT_SECONDS = 60
-
-    setInterval(() => {
-        document.querySelectorAll('.grafana-app .dashboard-content .panel-wrapper').forEach((panel: any) => {
-            const header = panel.querySelector('.panel-header .panel-title-container')
-            if (!header) {
-                return
-            }
-            if (header.querySelector('.clew-searcher-btn')) {
-                return
-            }
-            const panelId = parseInt(panel.parentNode.id.split('-')[1])
-            const title = panel.querySelector('.panel-title-text').innerHTML
-            const button = document.createElement('button')
-            button.className = 'clew-searcher-btn'
-            button.innerText = 'Search'
-            const cssText = [
-                'position: absolute; right: 0.5em; top: 0; cursor: pointer;',
-                'color: #000'
-            ].join('')
-            button.style.cssText = cssText
-            header.appendChild(button)
-            button.addEventListener('click', function(e) {
-                e.stopPropagation()
-                searcher.searchClew(e, panelId, title)
-            })
-        })
-    }, 1000)
 
     class ClewSearcher {
         isRunning: Boolean = false
         timeSrv: TimeSrv
         groupMap: {[key: number]: string}
+        selectedSeries: string
 
         constructor() {}
 
@@ -54,17 +28,32 @@
                 return
             }
             this.isRunning = true
-            debug('click', panelId, title)
             this.timeSrv = ($(document) as any).injector().get('timeSrv') as TimeSrv
             {
                 const timeRange = this.timeSrv.timeRange()
                 const {from, to} = timeRange.raw
                 if (from.toString().includes('now') || to.toString().includes('now')) {
-                    console.log('time range is not fixed, please fix it first')
+                    notice('time range is not fixed, please fix it first')
                     this.isRunning = false
                     return
                 }
             }
+            {
+                const serieses = document.querySelectorAll(`.grafana-app .dashboard-content #panel-${panelId} .graph-legend-series`)
+                const selectedSeries = Array.from(serieses).filter((series) => !series.classList.contains('graph-legend-series-hidden'))
+                if (selectedSeries.length !== 1) {
+                    notice('please select only one series')
+                    debug('all series', serieses, 'selected series', selectedSeries)
+                    this.isRunning = false
+                    return
+                }
+                this.selectedSeries = selectedSeries[0].querySelector('.graph-legend-alias').innerHTML
+            }
+            debug('click', panelId, title, this.selectedSeries)
+            notice(
+                'searching...',
+                'please wait a moment and do not click the dashboard.',
+            )
             const dashboard = this.timeSrv.dashboard
             let basePanelResult: PanelResult
             for (let id = 0; id < dashboard.panels.length; id++) {
@@ -87,20 +76,23 @@
             }
             debug('search clew of', title, basePanelResult)
             const headPanalResults: PanelResult[] = await this.readAllMetrics(basePanelResult)
-            debug('metrics read done, check `window.headPanalResults` and `window.basePanelResult')
+            debug('metrics read done, check `window.headPanalResults` and `window.basePanelResult`')
             if (debugMode) {
                 (window as any).headPanalResults = headPanalResults as any
                 (window as any).basePanelResult = basePanelResult
             }
             debug('calculation distance start')
-            const rankedPanels = rankMetrics(basePanelResult, headPanalResults, euclidean_distance_curve)
+            const rankedPanels = this.rankMetrics(basePanelResult, headPanalResults, euclidean_distance_curve)
             debug('calculation distance done')
+            const results = []
             for (let i = 0; i < rankedPanels.length; i++) {
                 if (i >= 10) {
                     break
                 }
-                console.log(`rank ${i+1}, score: ${rankedPanels[i].score}, group: ${this.groupMap[rankedPanels[i].panel.id]}, panel: ${rankedPanels[i].panel.title}, series: ${rankedPanels[i].lowestSeriesName}`)
+                results.push(`Distance rank ${i+1}, score: ${rankedPanels[i].score}, group: ${this.groupMap[rankedPanels[i].panel.id]}, panel: ${rankedPanels[i].panel.title}, series: ${rankedPanels[i].lowestSeriesName}`)
             }
+            clearNotice()
+            notice(...results)
             this.isRunning = false
         }
 
@@ -122,7 +114,7 @@
             scrollView.scrollTo(0, 0)
 
             this.groupMap = panelsGroupMap(timeSrv.dashboard.panels)
-
+            notice(`it will take ${MAX_WAIT_SECONDS} seconds to guarantee the latest data is fetched.`)
             const panelSeriesFutures: Promise<PanelResult>[] = timeSrv.dashboard.panels
                 .map(async (panel) => {
                     if (!panel.queryRunner || panel.id === basePanel.panel.id || panel.type === 'row') {
@@ -130,7 +122,7 @@
                     }
                     for (let i = 0; i < MAX_WAIT_SECONDS; i++) {
                         const result = panel.queryRunner.getLastResult()
-                        if (!(checkTimeSeries(result) && compareTimeSeries(basePanel.result, result))) {
+                        if (!(checkTimeSeries(result) && compareTimeSeries(this.selectedSeries, basePanel.result, result))) {
                             await sleep(1000)
                             continue
                         }
@@ -143,6 +135,38 @@
             const panelSeries = await Promise.all(panelSeriesFutures)
             timeSrv.dashboard.collapseRows()
             return panelSeries.filter((series) => series !== undefined)
+        }
+
+        rankMetrics(basePanelResult: PanelResult, headPanelResults: PanelResult[], distanceCalculator: DistanceCalculator): ScoredPanel[] {
+            const scoredResults = headPanelResults.map((headPanelResult) => {
+                const scoredResult = {
+                    panel: headPanelResult.panel,
+                    score: -1,
+                    lowestSeriesName: ''
+                }
+                for (const headSeries of headPanelResult.result.series) {
+                    for (const baseSeries of basePanelResult.result.series) {
+                        if (baseSeries.name !== this.selectedSeries) {
+                            continue
+                        }
+                        const headValues = extractQueryValues(headSeries)
+                        const baseValues = extractQueryValues(baseSeries)
+                        if (!headValues || !baseValues) {
+                            continue
+                        }
+                        const distance = distanceCalculator(baseValues, headValues)
+                        if (scoredResult.score === -1 || distance < scoredResult.score) {
+                            scoredResult.score = distance
+                            scoredResult.lowestSeriesName = headSeries.name
+                        }
+                    }
+                }
+                return scoredResult
+            }).filter((scoredResult) => scoredResult.score !== -1
+                && scoredResult.score < Number.MAX_VALUE
+                && scoredResult.score > MIN_DISTANCE)
+            scoredResults.sort((a, b) => a.score - b.score)
+            return scoredResults
         }
     }
 
@@ -188,8 +212,9 @@
         return true
     }
 
-    function compareTimeSeries(baseResult: Result, headResult: Result): Boolean {
-        const baseTimeValues = extractTimeValues(baseResult.series[0])
+    function compareTimeSeries(baseSeriesName: string, baseResult: Result, headResult: Result): Boolean {
+        const baseSeries = baseResult.series.find((series) => series.name === baseSeriesName)
+        const baseTimeValues = extractTimeValues(baseSeries)
         const headTimeValues = extractTimeValues(headResult.series[0])
         if (!baseTimeValues || !headTimeValues) {
             return false
@@ -204,35 +229,6 @@
         }
         return true
     }
-
-    function rankMetrics(basePanelResult: PanelResult, headPanelResults: PanelResult[], distanceCalculator: DistanceCalculator): ScoredPanel[] {
-        const scoredResults = headPanelResults.map((headPanelResult) => {
-            const scoredResult = {
-                panel: headPanelResult.panel,
-                score: -1,
-                lowestSeriesName: ''
-            }
-            for (const headSeries of headPanelResult.result.series) {
-                for (const baseSeries of basePanelResult.result.series) {
-                    const headValues = extractQueryValues(headSeries)
-                    const baseValues = extractQueryValues(baseSeries)
-                    if (!headValues || !baseValues) {
-                        continue
-                    }
-                    const distance = distanceCalculator(baseValues, headValues)
-                    if (scoredResult.score === -1 || distance < scoredResult.score) {
-                        scoredResult.score = distance
-                        scoredResult.lowestSeriesName = headSeries.name
-                    }
-                }
-            }
-            return scoredResult
-        }).filter((scoredResult) => scoredResult.score !== -1
-            && scoredResult.score < Number.MAX_VALUE
-            && scoredResult.score > MIN_DISTANCE)
-        scoredResults.sort((a, b) => a.score - b.score)
-        return scoredResults
-    }
     
     function panelsGroupMap(panels: Panel[]): {[key: number]: string} {
         const m: {[key: number]: string} = {}
@@ -240,6 +236,12 @@
         for (const panel of panels) {
             if (panel.type === 'row') {
                 groupName = panel.title
+                if (panel.scopedVars) {
+                    for (const key in panel.scopedVars) {
+                        const value = panel.scopedVars[key].value
+                        groupName = groupName.replace(`$${key}`, value)
+                    }
+                }
                 continue
             }
             m[panel.id] = groupName
@@ -278,6 +280,136 @@
         for (let i = 0; i < base.length; i++) {
             sum += Math.pow(base[i] / maxBase - head[i] / maxHead, 2)
         }
-        return Math.sqrt(sum / base.length)
+        const res = Math.sqrt(sum / base.length)
+        if (res < MIN_DISTANCE) {
+            return res
+        }
+        return res
     }
+
+    function notice(...msgs: string[]): void {
+        const existNotice = document.getElementById('fire-investigator-notice-div')
+        if (existNotice) {
+            existNotice.innerText += '\n--------------------------------\n'
+            existNotice.innerText += msgs.join('\n')
+            return
+        }
+        const noticeDiv = document.createElement('div')
+        noticeDiv.id = 'fire-investigator-notice-div'
+        noticeDiv.style.cssText = [
+            'position: fixed;',
+            'top: 0; left: 0;',
+            'z-index: 9998;',
+            'width: 100%;',
+            'padding: 20px;',
+            'background-color: rgba(62, 62, 62, 0.5);',
+            'color: white; font-size: 16px;',
+            'text-align: center;'
+        ].join('')
+        noticeDiv.innerText = msgs.join('\n')
+        const closeBtn = document.createElement('span')
+        closeBtn.id = 'fire-investigator-notice-close-btn'
+        closeBtn.innerText = 'X'
+        closeBtn.style.cssText = [
+            'position: fixed;',
+            'right: 20px; top: 20px;',
+            'z-index: 9999;',
+            'cursor: pointer;',
+            'font-size: 30px; color: white;'
+        ].join('')
+        closeBtn.addEventListener('click', function() {
+            noticeDiv.remove()
+            closeBtn.remove()
+        })
+        document.body.appendChild(closeBtn)
+        document.body.appendChild(noticeDiv)
+    }
+
+    function clearNotice(): void {
+        const noticeDiv = document.getElementById('fire-investigator-notice-div')
+        if (noticeDiv) {
+            noticeDiv.remove()
+        }
+        const closeBtn = document.getElementById('fire-investigator-notice-close-btn')
+        if (closeBtn) {
+            closeBtn.remove()
+        }
+    }
+
+    setInterval(() => {
+        document.querySelectorAll('.grafana-app .dashboard-content .panel-wrapper').forEach((panel: any) => {
+            const header = panel.querySelector('.panel-header .panel-title-container')
+            if (!header) {
+                return
+            }
+            if (header.querySelector('.fire-searcher-btn')) {
+                return
+            }
+            const panelId = parseInt(panel.parentNode.id.split('-')[1])
+            const title = panel.querySelector('.panel-title-text').innerHTML
+            const button = document.createElement('button')
+            button.className = 'fire-searcher-btn'
+            button.innerText = 'Search'
+            const cssText = [
+                'position: absolute; right: 0; top: 0; cursor: pointer;',
+                'color: #000; border-style: none;'
+            ].join('')
+            button.style.cssText = cssText
+            header.appendChild(button)
+            button.addEventListener('click', function(e) {
+                e.stopPropagation()
+                searcher.searchClew(e, panelId, title)
+            })
+        })
+    }, 1000)
+
+
+    setInterval(() => {
+        const sideMenu = document.querySelector('.grafana-app .sidemenu__top')
+        if (sideMenu) {
+            if (sideMenu.querySelector('#fire-investigator-menu')) {
+                return
+            }
+            const menuBtn = document.createElement('div')
+            menuBtn.id = 'fire-investigator-menu'
+
+            // menu button
+            menuBtn.classList.add('sidemenu-item', 'dropdown')
+            const p = document.createElement('p')
+            p.classList.add('sidemenu-link')
+            p.style.marginBottom = '0'
+            const span = document.createElement('span')
+            span.innerText = '🔥'
+            p.appendChild(span)
+
+            // menu content
+            const menuContent = document.createElement('ul')
+            menuContent.classList.add('dropdown-menu', 'dropdown-menu--sidemenu')
+            const menuHeader = document.createElement('li')
+            menuHeader.classList.add('side-menu-header')
+            const menuHeaderText = document.createElement('span')
+            menuHeaderText.classList.add('sidemenu-item-text')
+            menuHeaderText.innerText = 'Fire Investigator Configuration'
+            menuHeader.appendChild(menuHeaderText)
+            menuContent.appendChild(menuHeader)
+            // wait time
+            const switchDisplayBtn = document.createElement('li')
+            switchDisplayBtn.innerHTML = 'Hide Search Button'
+            let displaySearchBtn = true
+            switchDisplayBtn.addEventListener('click', function() {
+                displaySearchBtn = !displaySearchBtn
+                document.querySelectorAll('.fire-searcher-btn').forEach((btn: any) => {
+                    btn.style.display = displaySearchBtn ? 'block' : 'none'
+                })
+                switchDisplayBtn.innerHTML = displaySearchBtn ? 'Hide Search Button' : 'Show Search Button'
+            })
+            switchDisplayBtn.style.cssText = 'padding: 5px 10px 5px 20px; cursor: pointer;'
+            menuContent.appendChild(switchDisplayBtn)
+
+            // append to menu
+            menuBtn.appendChild(p)
+            menuBtn.appendChild(menuContent)
+            sideMenu.appendChild(menuBtn)
+        }
+    }, 1999)
 })();

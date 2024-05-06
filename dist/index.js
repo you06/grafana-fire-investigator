@@ -54,42 +54,16 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
 };
 (function () {
     'use strict';
-    var debugMode = true;
+    var debugMode = false;
     var MIN_DISTANCE = 1e-10;
     var MAX_WAIT_SECONDS = 60;
-    setInterval(function () {
-        document.querySelectorAll('.grafana-app .dashboard-content .panel-wrapper').forEach(function (panel) {
-            var header = panel.querySelector('.panel-header .panel-title-container');
-            if (!header) {
-                return;
-            }
-            if (header.querySelector('.clew-searcher-btn')) {
-                return;
-            }
-            var panelId = parseInt(panel.parentNode.id.split('-')[1]);
-            var title = panel.querySelector('.panel-title-text').innerHTML;
-            var button = document.createElement('button');
-            button.className = 'clew-searcher-btn';
-            button.innerText = 'Search';
-            var cssText = [
-                'position: absolute; right: 0.5em; top: 0; cursor: pointer;',
-                'color: #000'
-            ].join('');
-            button.style.cssText = cssText;
-            header.appendChild(button);
-            button.addEventListener('click', function (e) {
-                e.stopPropagation();
-                searcher.searchClew(e, panelId, title);
-            });
-        });
-    }, 1000);
     var ClewSearcher = /** @class */ (function () {
         function ClewSearcher() {
             this.isRunning = false;
         }
         ClewSearcher.prototype.searchClew = function (e, panelId, title) {
             return __awaiter(this, void 0, void 0, function () {
-                var timeRange, _a, from, to, dashboard, basePanelResult, id, panel, result, headPanalResults, rankedPanels, i;
+                var timeRange, _a, from, to, serieses, selectedSeries, dashboard, basePanelResult, id, panel, result, headPanalResults, rankedPanels, results, i;
                 return __generator(this, function (_b) {
                     switch (_b.label) {
                         case 0:
@@ -97,17 +71,29 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
                                 return [2 /*return*/];
                             }
                             this.isRunning = true;
-                            debug('click', panelId, title);
                             this.timeSrv = $(document).injector().get('timeSrv');
                             {
                                 timeRange = this.timeSrv.timeRange();
                                 _a = timeRange.raw, from = _a.from, to = _a.to;
                                 if (from.toString().includes('now') || to.toString().includes('now')) {
-                                    console.log('time range is not fixed, please fix it first');
+                                    notice('time range is not fixed, please fix it first');
                                     this.isRunning = false;
                                     return [2 /*return*/];
                                 }
                             }
+                            {
+                                serieses = document.querySelectorAll(".grafana-app .dashboard-content #panel-".concat(panelId, " .graph-legend-series"));
+                                selectedSeries = Array.from(serieses).filter(function (series) { return !series.classList.contains('graph-legend-series-hidden'); });
+                                if (selectedSeries.length !== 1) {
+                                    notice('please select only one series');
+                                    debug('all series', serieses, 'selected series', selectedSeries);
+                                    this.isRunning = false;
+                                    return [2 /*return*/];
+                                }
+                                this.selectedSeries = selectedSeries[0].querySelector('.graph-legend-alias').innerHTML;
+                            }
+                            debug('click', panelId, title, this.selectedSeries);
+                            notice('searching...', 'please wait a moment and do not click the dashboard.');
                             dashboard = this.timeSrv.dashboard;
                             for (id = 0; id < dashboard.panels.length; id++) {
                                 if (dashboard.panels[id].title === title && dashboard.panels[id].id === panelId) {
@@ -131,20 +117,23 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
                             return [4 /*yield*/, this.readAllMetrics(basePanelResult)];
                         case 1:
                             headPanalResults = _b.sent();
-                            debug('metrics read done, check `window.headPanalResults` and `window.basePanelResult');
+                            debug('metrics read done, check `window.headPanalResults` and `window.basePanelResult`');
                             if (debugMode) {
                                 window.headPanalResults = headPanalResults;
                                 window.basePanelResult = basePanelResult;
                             }
                             debug('calculation distance start');
-                            rankedPanels = rankMetrics(basePanelResult, headPanalResults, euclidean_distance_curve);
+                            rankedPanels = this.rankMetrics(basePanelResult, headPanalResults, euclidean_distance_curve);
                             debug('calculation distance done');
+                            results = [];
                             for (i = 0; i < rankedPanels.length; i++) {
                                 if (i >= 10) {
                                     break;
                                 }
-                                console.log("rank ".concat(i + 1, ", score: ").concat(rankedPanels[i].score, ", group: ").concat(this.groupMap[rankedPanels[i].panel.id], ", panel: ").concat(rankedPanels[i].panel.title, ", series: ").concat(rankedPanels[i].lowestSeriesName));
+                                results.push("Distance rank ".concat(i + 1, ", score: ").concat(rankedPanels[i].score, ", group: ").concat(this.groupMap[rankedPanels[i].panel.id], ", panel: ").concat(rankedPanels[i].panel.title, ", series: ").concat(rankedPanels[i].lowestSeriesName));
                             }
+                            clearNotice();
+                            notice.apply(void 0, results);
                             this.isRunning = false;
                             return [2 /*return*/];
                     }
@@ -183,6 +172,7 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
                             // TODO: back to current scroll position
                             scrollView.scrollTo(0, 0);
                             this.groupMap = panelsGroupMap(timeSrv.dashboard.panels);
+                            notice("it will take ".concat(MAX_WAIT_SECONDS, " seconds to guarantee the latest data is fetched."));
                             panelSeriesFutures = timeSrv.dashboard.panels
                                 .map(function (panel) { return __awaiter(_this, void 0, void 0, function () {
                                 var i, result;
@@ -197,7 +187,7 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
                                         case 1:
                                             if (!(i < MAX_WAIT_SECONDS)) return [3 /*break*/, 5];
                                             result = panel.queryRunner.getLastResult();
-                                            if (!!(checkTimeSeries(result) && compareTimeSeries(basePanel.result, result))) return [3 /*break*/, 3];
+                                            if (!!(checkTimeSeries(result) && compareTimeSeries(this.selectedSeries, basePanel.result, result))) return [3 /*break*/, 3];
                                             return [4 /*yield*/, sleep(1000)];
                                         case 2:
                                             _a.sent();
@@ -221,6 +211,40 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
                     }
                 });
             });
+        };
+        ClewSearcher.prototype.rankMetrics = function (basePanelResult, headPanelResults, distanceCalculator) {
+            var _this = this;
+            var scoredResults = headPanelResults.map(function (headPanelResult) {
+                var scoredResult = {
+                    panel: headPanelResult.panel,
+                    score: -1,
+                    lowestSeriesName: ''
+                };
+                for (var _i = 0, _a = headPanelResult.result.series; _i < _a.length; _i++) {
+                    var headSeries = _a[_i];
+                    for (var _b = 0, _c = basePanelResult.result.series; _b < _c.length; _b++) {
+                        var baseSeries = _c[_b];
+                        if (baseSeries.name !== _this.selectedSeries) {
+                            continue;
+                        }
+                        var headValues = extractQueryValues(headSeries);
+                        var baseValues = extractQueryValues(baseSeries);
+                        if (!headValues || !baseValues) {
+                            continue;
+                        }
+                        var distance = distanceCalculator(baseValues, headValues);
+                        if (scoredResult.score === -1 || distance < scoredResult.score) {
+                            scoredResult.score = distance;
+                            scoredResult.lowestSeriesName = headSeries.name;
+                        }
+                    }
+                }
+                return scoredResult;
+            }).filter(function (scoredResult) { return scoredResult.score !== -1
+                && scoredResult.score < Number.MAX_VALUE
+                && scoredResult.score > MIN_DISTANCE; });
+            scoredResults.sort(function (a, b) { return a.score - b.score; });
+            return scoredResults;
         };
         return ClewSearcher;
     }());
@@ -262,8 +286,9 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
         }
         return true;
     }
-    function compareTimeSeries(baseResult, headResult) {
-        var baseTimeValues = extractTimeValues(baseResult.series[0]);
+    function compareTimeSeries(baseSeriesName, baseResult, headResult) {
+        var baseSeries = baseResult.series.find(function (series) { return series.name === baseSeriesName; });
+        var baseTimeValues = extractTimeValues(baseSeries);
         var headTimeValues = extractTimeValues(headResult.series[0]);
         if (!baseTimeValues || !headTimeValues) {
             return false;
@@ -278,36 +303,6 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
         }
         return true;
     }
-    function rankMetrics(basePanelResult, headPanelResults, distanceCalculator) {
-        var scoredResults = headPanelResults.map(function (headPanelResult) {
-            var scoredResult = {
-                panel: headPanelResult.panel,
-                score: -1,
-                lowestSeriesName: ''
-            };
-            for (var _i = 0, _a = headPanelResult.result.series; _i < _a.length; _i++) {
-                var headSeries = _a[_i];
-                for (var _b = 0, _c = basePanelResult.result.series; _b < _c.length; _b++) {
-                    var baseSeries = _c[_b];
-                    var headValues = extractQueryValues(headSeries);
-                    var baseValues = extractQueryValues(baseSeries);
-                    if (!headValues || !baseValues) {
-                        continue;
-                    }
-                    var distance = distanceCalculator(baseValues, headValues);
-                    if (scoredResult.score === -1 || distance < scoredResult.score) {
-                        scoredResult.score = distance;
-                        scoredResult.lowestSeriesName = headSeries.name;
-                    }
-                }
-            }
-            return scoredResult;
-        }).filter(function (scoredResult) { return scoredResult.score !== -1
-            && scoredResult.score < Number.MAX_VALUE
-            && scoredResult.score > MIN_DISTANCE; });
-        scoredResults.sort(function (a, b) { return a.score - b.score; });
-        return scoredResults;
-    }
     function panelsGroupMap(panels) {
         var m = {};
         var groupName = '';
@@ -315,6 +310,12 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
             var panel = panels_1[_i];
             if (panel.type === 'row') {
                 groupName = panel.title;
+                if (panel.scopedVars) {
+                    for (var key in panel.scopedVars) {
+                        var value = panel.scopedVars[key].value;
+                        groupName = groupName.replace("$".concat(key), value);
+                    }
+                }
                 continue;
             }
             m[panel.id] = groupName;
@@ -360,7 +361,133 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
         for (var i = 0; i < base.length; i++) {
             sum += Math.pow(base[i] / maxBase - head[i] / maxHead, 2);
         }
-        return Math.sqrt(sum / base.length);
+        var res = Math.sqrt(sum / base.length);
+        if (res < MIN_DISTANCE) {
+            return res;
+        }
+        return res;
     }
+    function notice() {
+        var msgs = [];
+        for (var _i = 0; _i < arguments.length; _i++) {
+            msgs[_i] = arguments[_i];
+        }
+        var existNotice = document.getElementById('fire-investigator-notice-div');
+        if (existNotice) {
+            existNotice.innerText += '\n--------------------------------\n';
+            existNotice.innerText += msgs.join('\n');
+            return;
+        }
+        var noticeDiv = document.createElement('div');
+        noticeDiv.id = 'fire-investigator-notice-div';
+        noticeDiv.style.cssText = [
+            'position: fixed;',
+            'top: 0; left: 0;',
+            'z-index: 9998;',
+            'width: 100%;',
+            'padding: 20px;',
+            'background-color: rgba(62, 62, 62, 0.5);',
+            'color: white; font-size: 16px;',
+            'text-align: center;'
+        ].join('');
+        noticeDiv.innerText = msgs.join('\n');
+        var closeBtn = document.createElement('span');
+        closeBtn.id = 'fire-investigator-notice-close-btn';
+        closeBtn.innerText = 'X';
+        closeBtn.style.cssText = [
+            'position: fixed;',
+            'right: 20px; top: 20px;',
+            'z-index: 9999;',
+            'cursor: pointer;',
+            'font-size: 30px; color: white;'
+        ].join('');
+        closeBtn.addEventListener('click', function () {
+            noticeDiv.remove();
+            closeBtn.remove();
+        });
+        document.body.appendChild(closeBtn);
+        document.body.appendChild(noticeDiv);
+    }
+    function clearNotice() {
+        var noticeDiv = document.getElementById('fire-investigator-notice-div');
+        if (noticeDiv) {
+            noticeDiv.remove();
+        }
+        var closeBtn = document.getElementById('fire-investigator-notice-close-btn');
+        if (closeBtn) {
+            closeBtn.remove();
+        }
+    }
+    setInterval(function () {
+        document.querySelectorAll('.grafana-app .dashboard-content .panel-wrapper').forEach(function (panel) {
+            var header = panel.querySelector('.panel-header .panel-title-container');
+            if (!header) {
+                return;
+            }
+            if (header.querySelector('.fire-searcher-btn')) {
+                return;
+            }
+            var panelId = parseInt(panel.parentNode.id.split('-')[1]);
+            var title = panel.querySelector('.panel-title-text').innerHTML;
+            var button = document.createElement('button');
+            button.className = 'fire-searcher-btn';
+            button.innerText = 'Search';
+            var cssText = [
+                'position: absolute; right: 0; top: 0; cursor: pointer;',
+                'color: #000; border-style: none;'
+            ].join('');
+            button.style.cssText = cssText;
+            header.appendChild(button);
+            button.addEventListener('click', function (e) {
+                e.stopPropagation();
+                searcher.searchClew(e, panelId, title);
+            });
+        });
+    }, 1000);
+    setInterval(function () {
+        var sideMenu = document.querySelector('.grafana-app .sidemenu__top');
+        if (sideMenu) {
+            if (sideMenu.querySelector('#fire-investigator-menu')) {
+                return;
+            }
+            var menuBtn = document.createElement('div');
+            menuBtn.id = 'fire-investigator-menu';
+            // menu button
+            menuBtn.classList.add('sidemenu-item', 'dropdown');
+            var p = document.createElement('p');
+            p.classList.add('sidemenu-link');
+            p.style.marginBottom = '0';
+            var span = document.createElement('span');
+            span.innerText = '🔥';
+            p.appendChild(span);
+            // menu content
+            var menuContent = document.createElement('ul');
+            menuContent.classList.add('dropdown-menu', 'dropdown-menu--sidemenu');
+            var menuHeader = document.createElement('li');
+            menuHeader.classList.add('side-menu-header');
+            var menuHeaderText = document.createElement('span');
+            menuHeaderText.classList.add('sidemenu-item-text');
+            menuHeaderText.innerText = 'Fire Investigator Configuration';
+            menuHeader.appendChild(menuHeaderText);
+            menuContent.appendChild(menuHeader);
+            // wait time
+            var switchDisplayBtn_1 = document.createElement('li');
+            switchDisplayBtn_1.innerHTML = 'Hide Search Button';
+            var displaySearchBtn_1 = true;
+            switchDisplayBtn_1.addEventListener('click', function () {
+                displaySearchBtn_1 = !displaySearchBtn_1;
+                document.querySelectorAll('.fire-searcher-btn').forEach(function (btn) {
+                    btn.style.display = displaySearchBtn_1 ? 'block' : 'none';
+                });
+                switchDisplayBtn_1.innerHTML = displaySearchBtn_1 ? 'Hide Search Button' : 'Show Search Button';
+            });
+            switchDisplayBtn_1.style.cssText = 'padding: 5px 10px 5px 20px; cursor: pointer;';
+            menuContent.appendChild(switchDisplayBtn_1);
+            // append to menu
+            menuBtn.appendChild(p);
+            menuBtn.appendChild(menuContent);
+            sideMenu.appendChild(menuBtn);
+        }
+    }, 1999);
 })();
 //# sourceMappingURL=index.js.map

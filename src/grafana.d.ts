@@ -26,6 +26,10 @@ declare class Panel {
     id: number
     type: string
     title: string
+    scopedVars?: {[key: string]: {
+        text: string
+        value: string
+    }}
     queryRunner: QueryRunner
 }
 
